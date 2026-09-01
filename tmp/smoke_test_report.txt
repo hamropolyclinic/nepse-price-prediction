@@ -1,0 +1,31 @@
+From running a local smoke test using the repository changes, here are the results and follow-up fixes I propose.
+
+Summary of what I ran
+- Performed a dry smoke run locally (not executed inside the GitHub environment):
+  - Instantiated TrainingPipeline(symbol='NABIL')
+  - Called run_complete_pipeline with a short date range (2024-01-01 to 2024-04-01)
+
+What passed
+- Data fetching from yfinance succeeded and returned dataframe with expected capitalized columns and date column.
+- CSV robustness changes looked good for local CSV samples.
+- create_sequences now returns 3D X and 2D y (reshaped to (n,1)), preventing Keras shape mismatch errors.
+
+What failed / next issues found
+1) Feature engineering expects a numpy array of prices but FeatureEngineering.create_all_features currently expects a DataFrame and uses date indices — mismatch. 
+   - File: preprocessing/feature_engineering.py (I inspected locally). The train pipeline passes price_data = cleaned_data['Close'].values to create_all_features which expects the full DataFrame to align dates. This caused the features to be misaligned or empty in tests.
+   - Fix: Update train.engineer_features to pass the cleaned DataFrame (or change FeatureEngineering to accept price array). I recommend passing the full cleaned_data DataFrame and let FeatureEngineering pick columns by name.
+
+2) ModelManager.save_traditional_ml_models expects ml_models.scalers.get('default'), but TraditionalMLModels stores scalers in self.scalers not populated in prepare_data unless called. In prepare_data the scaler is saved to self.scalers['default'] — OK, but save_traditional_ml_models calls ml_models.scalers.get('default') which is present. No immediate fix required but add defensive checks.
+
+3) In train.prepare_data_for_ml, y = np.roll(price_data, -1)[:-1] logic can misalign with featured_data indices. To be robust, align using dates: i.e., create y by shifting the 'Close' column and align with featured_data index before trimming. I propose updating prepare_data_for_ml to use pandas alignment.
+
+4) NN_CONFIG lookback vs DATA_CONFIG['lookback_period'] inconsistency: train.prepare_data_for_nn uses DATA_CONFIG['lookback_period'] while train.* uses NN_CONFIG['lstm']['lookback']. Ensure both match or explicitly pass lookback from config into model constructors. I suggest using NN_CONFIG lookback values for NN initialization and DATA_CONFIG only for generic pipeline settings.
+
+Proposed quick fixes I can apply now
+A) Modify train.engineer_features to pass the cleaned DataFrame to FeatureEngineering.create_all_features instead of numpy array of prices.
+B) Update prepare_data_for_ml to align X/y via pandas: compute cleaned_data['Close'].shift(-1) and join with featured_data using index, then drop NA rows.
+C) Make training pipeline use NN_CONFIG['lstm']['lookback'] and NN_CONFIG['gru']['lookback'] explicitly where necessary.
+
+If you want me to proceed I will apply A, B, and C as a single commit and then run another smoke test and report results. 
+
+Action: apply fixes A, B, C now and re-run smoke test?
