@@ -133,17 +133,15 @@ class TrainingPipeline:
             
             logger.info("Engineering features...")
             
-            # Extract price data
-            price_data = self.cleaned_data['Close'].values
-            
-            # Create features
-            self.featured_data = self.feature_engineer.create_all_features(price_data)
+            # Pass the full cleaned DataFrame to the feature engineering module
+            # so it can use date/index alignment and column names.
+            self.featured_data = self.feature_engineer.create_all_features(self.cleaned_data)
             
             if self.featured_data is None or len(self.featured_data) == 0:
                 logger.error("Feature engineering failed")
                 return False
             
-            logger.info(f"Features created successfully. Shape: {self.featured_data.shape}")
+            logger.info(f"Features created successfully. Shape: {getattr(self.featured_data, 'shape', 'unknown')}")
             return True
             
         except Exception as e:
@@ -166,8 +164,8 @@ class TrainingPipeline:
             
             price_data = self.cleaned_data['Close'].values
             
-            # For NN models, we'll use raw price data with lookback
-            lookback = DATA_CONFIG['lookback_period']
+            # Use lookback from NN config (LSTM); keep consistent with model initialization
+            lookback = NN_CONFIG['lstm']['lookback']
             
             if len(price_data) < lookback:
                 logger.error(f"Not enough data. Need at least {lookback} records")
@@ -194,19 +192,33 @@ class TrainingPipeline:
             
             logger.info("Preparing data for traditional ML models...")
             
-            # Use featured data as X
-            X = self.featured_data
-            
-            # Use next day's price as y
-            price_data = self.cleaned_data['Close'].values
-            y = np.roll(price_data, -1)[:-1]  # Shift prices up and remove last
-            
-            # Keep only matching indices
-            if len(X) > len(y):
-                X = X[:len(y)]
-            elif len(y) > len(X):
-                y = y[:len(X)]
-            
+            # Convert featured_data to DataFrame if ndarray
+            if isinstance(self.featured_data, np.ndarray):
+                X_df = pd.DataFrame(self.featured_data)
+                # Align indices using cleaned_data dates if possible
+                cleaned_dates = self.cleaned_data['date'].reset_index(drop=True)
+                if len(cleaned_dates) >= len(X_df):
+                    X_df.index = pd.to_datetime(cleaned_dates.iloc[-len(X_df):].values)
+            else:
+                X_df = self.featured_data.copy()
+                if 'date' in X_df.columns:
+                    X_df['date'] = pd.to_datetime(X_df['date'])
+                    X_df.set_index('date', inplace=True)
+                else:
+                    cleaned_dates = self.cleaned_data['date'].reset_index(drop=True)
+                    if len(cleaned_dates) >= len(X_df):
+                        X_df.index = pd.to_datetime(cleaned_dates.iloc[-len(X_df):].values)
+
+            # Prepare the target (next day's Close) aligned by date
+            close_series = self.cleaned_data.set_index(pd.to_datetime(self.cleaned_data['date']))['Close'].shift(-1)
+
+            # Join and drop rows with missing target (this handles any misalignment)
+            combined = X_df.join(close_series.rename('target'), how='inner')
+            combined.dropna(subset=['target'], inplace=True)
+
+            X = combined.drop(columns=['target']).values
+            y = combined['target'].values
+
             logger.info(f"ML data prepared. X shape: {X.shape}, y shape: {y.shape}")
             return True, X, y
             
