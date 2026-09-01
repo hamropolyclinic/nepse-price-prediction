@@ -49,7 +49,11 @@ class DataLoader:
             
             # Reset index to make Date a column
             data.reset_index(inplace=True)
+            # keep date column lowercase for consistency
             data.rename(columns={'Date': 'date'}, inplace=True)
+
+            # Ensure expected column names are present (Open, High, Low, Close, Adj Close, Volume)
+            # yfinance usually returns these with capitalized names so nothing else required here
             
             self.data[symbol] = data
             logger.info(f"Successfully fetched {len(data)} records for {symbol}")
@@ -75,19 +79,44 @@ class DataLoader:
             logger.info(f"Loading data from {filepath}")
             
             data = pd.read_csv(filepath)
-            
-            # Standardize column names
-            data.columns = data.columns.str.lower()
-            
+
+            # Trim whitespace from column names
+            data.columns = [c.strip() for c in data.columns]
+
+            # Build a mapping to canonical column names to match yfinance output
+            col_map = {}
+            for col in data.columns:
+                lc = col.lower().replace(' ', '').replace('_', '')
+                if lc in ('date', 'timestamp'):
+                    col_map[col] = 'date'
+                elif lc == 'open':
+                    col_map[col] = 'Open'
+                elif lc == 'high':
+                    col_map[col] = 'High'
+                elif lc == 'low':
+                    col_map[col] = 'Low'
+                elif lc in ('close',) and 'adj' not in lc:
+                    # prefer raw Close if present
+                    col_map[col] = 'Close'
+                elif 'adj' in lc and 'close' in lc:
+                    col_map[col] = 'Adj Close'
+                elif lc == 'volume':
+                    col_map[col] = 'Volume'
+                else:
+                    # leave unknown columns as-is (they'll be kept)
+                    col_map[col] = col
+
+            data.rename(columns=col_map, inplace=True)
+
             # Ensure date column exists
             if 'date' not in data.columns:
-                logger.error("CSV must contain 'date' column")
+                logger.error("CSV must contain a date/timestamp column")
                 return None
-            
+
             # Convert date to datetime
             data['date'] = pd.to_datetime(data['date'])
             data.sort_values('date', inplace=True)
-            
+
             self.data[symbol] = data
             logger.info(f"Successfully loaded {len(data)} records from {filepath}")
             
