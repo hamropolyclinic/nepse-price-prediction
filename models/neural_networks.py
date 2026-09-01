@@ -39,18 +39,24 @@ class LSTMModel:
         Create sequences for LSTM training
         
         Args:
-            data: Input data array
+            data: 1D input data array (shape: [n_samples]) or 2D (n_samples, 1)
             
         Returns:
             Tuple of (X sequences, y targets)
+            - X shape: (n_sequences, lookback, 1)
+            - y shape: (n_sequences, 1)
         """
+        # Ensure we have a 1D array
+        arr = np.array(data).reshape(-1)
         X, y = [], []
-        
-        for i in range(len(data) - self.lookback):
-            X.append(data[i:i + self.lookback])
-            y.append(data[i + self.lookback])
-        
-        return np.array(X), np.array(y)
+        for i in range(len(arr) - self.lookback):
+            seq_x = arr[i:i + self.lookback].reshape(self.lookback, 1)
+            seq_y = arr[i + self.lookback]
+            X.append(seq_x)
+            y.append(seq_y)
+        X = np.array(X)
+        y = np.array(y).reshape(-1, 1)
+        return X, y
 
     def build_model(self, input_shape: Tuple[int, int]) -> Sequential:
         """
@@ -96,24 +102,22 @@ class LSTMModel:
         Prepare and scale data
         
         Args:
-            data: Input data
+            data: Input data (1D or 2D array)
             test_size: Test set size ratio
             
         Returns:
             Tuple of (X_train, X_test, y_train, y_test)
         """
         try:
-            # Scale data
-            scaled_data = self.scaler.fit_transform(data.reshape(-1, 1))
-            
-            # Create sequences
-            X, y = self.create_sequences(scaled_data.flatten())
-            
+            # Scale data to [0,1]
+            arr = np.array(data).reshape(-1, 1)
+            scaled = self.scaler.fit_transform(arr)
+            # create sequences from scaled flattened values
+            X, y = self.create_sequences(scaled.flatten())
             # Split data
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, shuffle=False
             )
-            
             logger.info(f"Data prepared: Train size: {len(X_train)}, Test size: {len(X_test)}")
             return X_train, X_test, y_train, y_test
             
@@ -127,8 +131,8 @@ class LSTMModel:
         Train the LSTM model
         
         Args:
-            X_train: Training features
-            y_train: Training targets
+            X_train: Training features (expected shape: samples, timesteps, features)
+            y_train: Training targets (samples, 1)
             epochs: Number of training epochs
             batch_size: Batch size
             validation_split: Validation split ratio
@@ -137,6 +141,13 @@ class LSTMModel:
             Training history dictionary
         """
         try:
+            # Defensive shape handling
+            if X_train.ndim == 2:
+                # reshape to (samples, timesteps, 1)
+                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+            if y_train.ndim == 1:
+                y_train = y_train.reshape(-1, 1)
+
             if self.model is None:
                 self.build_model((X_train.shape[1], X_train.shape[2]))
             
@@ -166,15 +177,18 @@ class LSTMModel:
         Make predictions
         
         Args:
-            X_test: Test features
+            X_test: Test features (samples, timesteps, features) or (samples, timesteps)
             
         Returns:
-            Predictions
+            Predictions (inverse-transformed to original scale)
         """
         try:
+            if X_test.ndim == 2:
+                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
             predictions = self.model.predict(X_test)
+            # predictions shape expected (n_samples, 1)
             predictions = self.scaler.inverse_transform(predictions)
-            
             return predictions
             
         except Exception as e:
@@ -238,10 +252,6 @@ class GRUModel:
     def __init__(self, lookback: int = 60, output_size: int = 1):
         """
         Initialize GRU model
-        
-        Args:
-            lookback: Number of previous timesteps to use as input
-            output_size: Number of output steps
         """
         self.lookback = lookback
         self.output_size = output_size
@@ -251,13 +261,14 @@ class GRUModel:
 
     def create_sequences(self, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Create sequences for GRU training"""
+        arr = np.array(data).reshape(-1)
         X, y = [], []
-        
-        for i in range(len(data) - self.lookback):
-            X.append(data[i:i + self.lookback])
-            y.append(data[i + self.lookback])
-        
-        return np.array(X), np.array(y)
+        for i in range(len(arr) - self.lookback):
+            X.append(arr[i:i + self.lookback].reshape(self.lookback, 1))
+            y.append(arr[i + self.lookback])
+        X = np.array(X)
+        y = np.array(y).reshape(-1, 1)
+        return X, y
 
     def build_model(self, input_shape: Tuple[int, int]) -> Sequential:
         """Build GRU neural network"""
@@ -293,13 +304,12 @@ class GRUModel:
     def prepare_data(self, data: np.ndarray, test_size: float = 0.2) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Prepare and scale data"""
         try:
-            scaled_data = self.scaler.fit_transform(data.reshape(-1, 1))
-            X, y = self.create_sequences(scaled_data.flatten())
-            
+            arr = np.array(data).reshape(-1, 1)
+            scaled = self.scaler.fit_transform(arr)
+            X, y = self.create_sequences(scaled.flatten())
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=test_size, shuffle=False
             )
-            
             logger.info(f"Data prepared: Train size: {len(X_train)}, Test size: {len(X_test)}")
             return X_train, X_test, y_train, y_test
             
@@ -311,6 +321,11 @@ class GRUModel:
               epochs: int = 50, batch_size: int = 32, validation_split: float = 0.1) -> Dict:
         """Train the GRU model"""
         try:
+            if X_train.ndim == 2:
+                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+            if y_train.ndim == 1:
+                y_train = y_train.reshape(-1, 1)
+
             if self.model is None:
                 self.build_model((X_train.shape[1], X_train.shape[2]))
             
@@ -338,9 +353,11 @@ class GRUModel:
     def predict(self, X_test: np.ndarray) -> np.ndarray:
         """Make predictions"""
         try:
+            if X_test.ndim == 2:
+                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
             predictions = self.model.predict(X_test)
             predictions = self.scaler.inverse_transform(predictions)
-            
             return predictions
             
         except Exception as e:
@@ -419,6 +436,9 @@ class EnsembleModel:
             lstm_pred = self.lstm_model.predict(X_test)
             gru_pred = self.gru_model.predict(X_test)
             
+            # Ensure same shape
+            if lstm_pred.shape != gru_pred.shape:
+                logger.warning("LSTM and GRU prediction shapes differ; attempting to broadcast")
             ensemble_pred = (self.weights[0] * lstm_pred) + (self.weights[1] * gru_pred)
             
             logger.info("Ensemble predictions generated")
